@@ -1,64 +1,60 @@
-require 'socket'    # para criar o servidor TCP
-require 'websocket' # para comunicação WebSocket
-require 'json'      # para enviar e receber dados em JSON
+require 'socket'
+require 'websocket'
+require 'json'
  
-BLOCK_SIZE = 20  # tamanho de cada bloco do jogo
-WIDTH = 600      # largura do mapa
-HEIGHT = 600     # altura do mapa
+BLOCK_SIZE = 20
+WIDTH  = 800
+HEIGHT = 800
  
-# cores disponíveis para cada jogador
 PLAYER_COLORS = ['green', 'blue', 'orange', 'red']
  
-# posições iniciais de cada jogador no mapa
 START_POSITIONS = [
   { x: 100, y: 100, direction: 'right' },
-  { x: 500, y: 500, direction: 'left' },
-  { x: 100, y: 500, direction: 'right' },
-  { x: 500, y: 100, direction: 'left' }
+  { x: 700, y: 700, direction: 'left'  },
+  { x: 100, y: 700, direction: 'right' },
+  { x: 700, y: 100, direction: 'left'  }
 ]
  
-# cria uma cobra com 5 blocos na posição inicial
+GRID_W = WIDTH  / BLOCK_SIZE  # 40
+GRID_H = HEIGHT / BLOCK_SIZE  # 40
+MIN_FOODS = 5   # mínimo de comidas normais no mapa
+ 
 def create_snake(x, y, direction)
   body = []
-  5.times do |i|
-    body << { x: x - (i * BLOCK_SIZE), y: y }
-  end
+  5.times { |i| body << { x: x - (i * BLOCK_SIZE), y: y } }
   {
-    body: body,
-    direction: direction,
-    alive: true,
-    score: 0,
-    slow_timer: 0,  # contador de frames que a cobra fica lenta
-    moves: 0,       # contador de movimentos feitos
-    skip: false     # usado para alternar frames quando lenta
+    body:       body,
+    direction:  direction,
+    alive:      true,
+    score:      0,
+    slow_timer: 0,
+    moves:      0,
+    skip:       false
   }
 end
  
-# cria uma comida numa posição aleatória
-# golden: true cria comida dourada que vale 5 pontos
 def create_food(golden: false)
   {
-    x: rand(0..29) * BLOCK_SIZE,
-    y: rand(0..29) * BLOCK_SIZE,
+    x:      rand(0..(GRID_W - 1)) * BLOCK_SIZE,
+    y:      rand(0..(GRID_H - 1)) * BLOCK_SIZE,
     golden: golden
   }
 end
  
-# cria a bola maluca que anda sozinha pelo mapa
-def create_crazy_ball
+# cria um projétil disparado por uma cobra
+def create_bullet(head, direction, owner_id)
   {
-    x: rand(0..29) * BLOCK_SIZE,
-    y: rand(0..29) * BLOCK_SIZE,
-    direction: ['right', 'left', 'up', 'down'].sample,  # direção aleatória
-    active: true
+    x:        head[:x],
+    y:        head[:y],
+    direction: direction,
+    owner_id:  owner_id,
+    active:    true
   }
 end
  
-# move a cobra uma posição na direção atual
 def move_snake(snake)
-  return if !snake[:alive]
+  return unless snake[:alive]
  
-  # se estiver lenta, salta frames alternados
   if snake[:slow_timer] > 0
     snake[:slow_timer] -= 1
     snake[:skip] = !snake[:skip]
@@ -72,111 +68,86 @@ def move_snake(snake)
              when 'up'    then { x: head[:x], y: head[:y] - BLOCK_SIZE }
              when 'down'  then { x: head[:x], y: head[:y] + BLOCK_SIZE }
              end
-  snake[:body].unshift(new_head)  # adiciona nova cabeça
-  snake[:body].pop                # remove a cauda
+  snake[:body].unshift(new_head)
+  snake[:body].pop
   snake[:moves] += 1
 end
  
-# move a bola maluca e faz-a rebater nas paredes
-def move_crazy_ball(ball)
-  # muda de direção aleatoriamente às vezes
-  ball[:direction] = ['right', 'left', 'up', 'down'].sample if rand(10) < 2
- 
-  case ball[:direction]
-  when 'right' then ball[:x] += BLOCK_SIZE
-  when 'left'  then ball[:x] -= BLOCK_SIZE
-  when 'up'    then ball[:y] -= BLOCK_SIZE
-  when 'down'  then ball[:y] += BLOCK_SIZE
+def move_bullet(bullet)
+  case bullet[:direction]
+  when 'right' then bullet[:x] += BLOCK_SIZE
+  when 'left'  then bullet[:x] -= BLOCK_SIZE
+  when 'up'    then bullet[:y] -= BLOCK_SIZE
+  when 'down'  then bullet[:y] += BLOCK_SIZE
   end
- 
-  # rebate nas paredes
-  if ball[:x] < 0
-    ball[:x] = 0
-    ball[:direction] = 'right'
-  elsif ball[:x] >= WIDTH
-    ball[:x] = WIDTH - BLOCK_SIZE
-    ball[:direction] = 'left'
-  end
-  if ball[:y] < 0
-    ball[:y] = 0
-    ball[:direction] = 'down'
-  elsif ball[:y] >= HEIGHT
-    ball[:y] = HEIGHT - BLOCK_SIZE
-    ball[:direction] = 'up'
+  # desativa se sair do mapa
+  if bullet[:x] < 0 || bullet[:x] >= WIDTH || bullet[:y] < 0 || bullet[:y] >= HEIGHT
+    bullet[:active] = false
   end
 end
  
-# verifica se a cobra saiu dos limites do mapa
 def hit_wall?(snake)
   head = snake[:body].first
   head[:x] < 0 || head[:x] >= WIDTH || head[:y] < 0 || head[:y] >= HEIGHT
 end
  
-# verifica se a cobra bateu em si própria
 def hit_self?(snake)
   return false if snake[:moves] < 5
   head = snake[:body].first
   snake[:body][1..].any? { |s| s == head }
 end
  
-# verifica se a cobra bateu noutra cobra
 def hit_other?(snake, others)
   return false if snake[:moves] < 5
   head = snake[:body].first
   others.any? { |other| other[:body].any? { |s| s == head } }
 end
  
-# verifica se a cobra comeu uma comida
 def ate_food?(snake, food)
   head = snake[:body].first
-  size = food[:golden] ? 30 : BLOCK_SIZE  # comida dourada é maior
+  size = food[:golden] ? 30 : BLOCK_SIZE
   head[:x] >= food[:x] && head[:x] < food[:x] + size &&
   head[:y] >= food[:y] && head[:y] < food[:y] + size
 end
  
-# estado do jogo
-players   = {}  # clientes conectados  { id => socket }
-snakes    = {}  # cobras de cada jogador
-nicknames = {}  # nicknames de cada jogador { id => string }
+# --- estado global ---
+players   = {}
+snakes    = {}
+nicknames = {}
+bullets   = []   # lista de projéteis ativos
  
-# comidas iniciais do mapa
 foods = []
-3.times { foods << create_food }
+6.times { foods << create_food }    # começa com 6 comidas normais
  
-crazy_ball        = create_crazy_ball
 next_id           = 0
 golden_food_timer = 0
 mutex             = Mutex.new
  
-# inicia o servidor na porta 3000
 server = TCPServer.new(3000)
 puts "Servidor iniciado na porta 3000!"
  
-# thread para aceitar novos jogadores
+# --- aceitar ligações ---
 Thread.new do
   loop do
     client = server.accept
  
-    # handshake WebSocket
     handshake = WebSocket::Handshake::Server.new
     handshake << client.gets("\r\n\r\n")
     client.write(handshake.to_s)
  
     mutex.synchronize do
       player_id = next_id
-      next_id += 1
+      next_id  += 1
  
       pos = START_POSITIONS[player_id % 4]
       snakes[player_id]    = create_snake(pos[:x], pos[:y], pos[:direction])
       players[player_id]   = client
-      nicknames[player_id] = "Jogador#{player_id + 1}"  # default até receber o nick
+      nicknames[player_id] = "Jogador#{player_id + 1}"
  
-      # envia mensagem de boas vindas com o id e cor do jogador
       welcome = { type: 'welcome', id: player_id, color: PLAYER_COLORS[player_id % 4] }
       frame = WebSocket::Frame::Outgoing::Server.new(version: 13, data: JSON.generate(welcome), type: :text)
       client.write(frame.to_s)
  
-      # thread para receber mensagens do jogador
       Thread.new do
         incoming = WebSocket::Frame::Incoming::Server.new
         loop do
@@ -188,7 +159,7 @@ Thread.new do
               input = JSON.parse(msg.data)
               mutex.synchronize do
  
-                # guarda o nickname enviado pelo cliente ao ligar
+                # nickname
                 if input['type'] == 'nickname'
                   nick = input['nickname'].to_s.strip
                   nick = "Jogador#{player_id + 1}" if nick.empty?
@@ -197,7 +168,7 @@ Thread.new do
                   next
                 end
  
-                # reiniciar jogador sem criar um novo cliente
+                # reiniciar
                 if input['type'] == 'restart'
                   pos = START_POSITIONS[player_id % 4]
                   snakes[player_id] = create_snake(pos[:x], pos[:y], pos[:direction])
@@ -205,7 +176,22 @@ Thread.new do
                   next
                 end
  
-                # atualiza a direção da cobra
+                # disparo — barra de espaço
+                if input['type'] == 'shoot' && snakes[player_id] && snakes[player_id][:alive]
+                  snake = snakes[player_id]
+                  if snake[:body].length > 2
+                    # perde 2 blocos
+                    2.times { snake[:body].pop if snake[:body].length > 1 }
+                    # fica lenta por 10 frames
+                    snake[:slow_timer] = 10
+                    # cria o projétil à frente da cabeça
+                    head = snake[:body].first
+                    bullets << create_bullet(head, snake[:direction], player_id)
+                  end
+                  next
+                end
+ 
+                # direção
                 if input['direction'] && snakes[player_id] && snakes[player_id][:alive]
                   dir = input['direction']
                   opposites = { 'right' => 'left', 'left' => 'right', 'up' => 'down', 'down' => 'up' }
@@ -233,34 +219,36 @@ Thread.new do
   end
 end
  
-# loop principal do jogo
+# --- loop principal ---
 loop do
-  sleep 0.15  # velocidade do jogo
+  sleep 0.15
   next if snakes.empty?
  
   mutex.synchronize do
-    # move a bola maluca
-    move_crazy_ball(crazy_ball)
  
-    # verifica se a bola maluca bateu numa cobra
-    snakes.each do |id, snake|
-      next unless snake[:alive]
-      if snake[:body].any? { |s| s[:x] == crazy_ball[:x] && s[:y] == crazy_ball[:y] }
-        snake[:body].pop if snake[:body].length > 1  # cobra perde um bloco (mínimo 1)
-        crazy_ball[:direction] = ['right', 'left', 'up', 'down'].sample
+    # move projéteis e verifica colisões
+    bullets.each do |bullet|
+      next unless bullet[:active]
+      move_bullet(bullet)
+      next unless bullet[:active]
+ 
+      snakes.each do |id, snake|
+        next unless snake[:alive]
+        next if id == bullet[:owner_id]  # não acerta no próprio dono
+ 
+        if snake[:body].any? { |s| s[:x] == bullet[:x] && s[:y] == bullet[:y] }
+          # acertou — cobra perde 2 blocos
+          2.times { snake[:body].pop if snake[:body].length > 1 }
+          snake[:slow_timer] = 10
+          bullet[:active] = false
+          puts "#{nicknames[bullet[:owner_id]]} acertou em #{nicknames[id]}!"
+          break
+        end
       end
     end
+    bullets.reject! { |b| !b[:active] }
  
-    # verifica se a bola maluca bateu numa comida
-    foods.each do |food|
-      if food[:x] == crazy_ball[:x] && food[:y] == crazy_ball[:y]
-        food[:x] = rand(0..29) * BLOCK_SIZE
-        food[:y] = rand(0..29) * BLOCK_SIZE
-        crazy_ball[:direction] = ['right', 'left', 'up', 'down'].sample
-      end
-    end
- 
-    # aparece comida dourada raramente
+    # comida dourada
     golden_food_timer += 1
     if golden_food_timer >= 50 && foods.none? { |f| f[:golden] }
       foods << create_food(golden: true)
@@ -268,25 +256,26 @@ loop do
       puts "Comida dourada apareceu!"
     end
  
-    # move e verifica colisões de todas as cobras
+    # garante mínimo de comidas normais
+    normal_count = foods.count { |f| !f[:golden] }
+    (MIN_FOODS - normal_count).times { foods << create_food } if normal_count < MIN_FOODS
+ 
+    # move cobras e colisões
     snakes.each do |id, snake|
       next unless snake[:alive]
       move_snake(snake)
  
-      # verifica colisões com paredes e próprio corpo
       if hit_wall?(snake) || hit_self?(snake)
         snake[:alive] = false
         next
       end
  
-      # verifica colisões com outras cobras
-      others = snakes.reject { |other_id, _| other_id == id }.values
+      others = snakes.reject { |oid, _| oid == id }.values
       if hit_other?(snake, others)
         snake[:alive] = false
         next
       end
  
-      # verifica se comeu alguma comida
       foods.each_with_index do |food, i|
         if ate_food?(snake, food)
           if food[:golden]
@@ -302,8 +291,7 @@ loop do
       end
     end
  
-    # envia o estado do jogo para todos os jogadores
-    # inclui o nickname de cada cobra no estado
+    # envia estado
     state = {
       type: 'state',
       snakes: snakes.map do |id, s|
@@ -316,8 +304,8 @@ loop do
           nickname: nicknames[id] || "Jogador#{id + 1}"
         }]
       end.to_h,
-      foods:      foods,
-      crazy_ball: crazy_ball
+      foods:   foods,
+      bullets: bullets.select { |b| b[:active] }
     }
  
     players.each do |id, client|
