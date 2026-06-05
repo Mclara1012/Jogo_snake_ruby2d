@@ -129,11 +129,38 @@ on :key_held do |event|
   end
 end
 
-on :key_down do |event|
-  # reinicia o cliente ao pressionar R sem pedir o IP novamente
-  if event.key == 'r' && player_id && game_state['snakes'] && game_state['snakes'][player_id.to_s] && !game_state['snakes'][player_id.to_s]['alive']
-    exec("ruby snake_client.rb #{server_ip}")
+
+  on :key_down do |event|
+
+  # se estiver morto e carregar R
+  if event.key == 'r' &&
+     player_id &&
+     game_state['snakes'] &&
+     game_state['snakes'][player_id.to_s] &&
+     !game_state['snakes'][player_id.to_s]['alive']
+
+    begin
+
+      # pede ao servidor para recriar a cobra
+      restart = {
+        type: 'restart'
+      }
+
+      frame = WebSocket::Frame::Outgoing::Client.new(
+        version: 13,
+        data: JSON.generate(restart),
+        type: :text
+      )
+
+      socket.write(frame.to_s)
+
+      puts "Pedido de reinício enviado."
+
+    rescue => e
+      puts e
+    end
   end
 end
+
 
 show  # mostra a janela e inicia o jogo

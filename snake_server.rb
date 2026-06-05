@@ -137,7 +137,12 @@ end
 # estado do jogo
 players = {}           # clientes conectados
 snakes = {}            # cobras de cada jogador
-foods = []             # lista de comidas no mapa
+# comidas iniciais do mapa
+foods = []
+
+3.times do
+  foods << create_food
+end
 crazy_ball = create_crazy_ball  # bola maluca
 next_id = 0            # id do próximo jogador
 golden_food_timer = 0  # contador para aparecer comida dourada
@@ -165,7 +170,19 @@ Thread.new do
       pos = START_POSITIONS[player_id % 4]
       snakes[player_id] = create_snake(pos[:x], pos[:y], pos[:direction])
       players[player_id] = client
-      foods << create_food
+      
+      player_id = next_id
+      next_id += 1
+
+      pos = START_POSITIONS[player_id % 4]
+      snakes[player_id] = create_snake(
+      pos[:x],
+      pos[:y],
+      pos[:direction]
+      )
+
+      players[player_id] = client
+     
       puts "Jogador #{player_id + 1} entrou!"
 
       # envia mensagem de boas vindas com o id e cor do jogador
@@ -184,6 +201,23 @@ Thread.new do
             while (msg = incoming.next)
               input = JSON.parse(msg.data)
               mutex.synchronize do
+
+# reiniciar jogador sem criar um novo cliente
+if input['type'] == 'restart'
+
+  pos = START_POSITIONS[player_id % 4]
+
+  snakes[player_id] = create_snake(
+    pos[:x],
+    pos[:y],
+    pos[:direction]
+  )
+
+  puts "Jogador #{player_id + 1} reiniciou!"
+
+  next
+end
+
                 # atualiza a direção da cobra
                 if input['direction'] && snakes[player_id][:alive]
                   dir = input['direction']
@@ -198,11 +232,16 @@ Thread.new do
             break
           end
         end
-        puts "Jogador #{player_id + 1} saiu!"
-        mutex.synchronize do
-          snakes[player_id][:alive] = false
-          players.delete(player_id)
-        end
+
+
+puts "Jogador #{player_id + 1} saiu!"
+
+mutex.synchronize do
+  players.delete(player_id)
+  snakes.delete(player_id)
+end
+
+
       end
     end
   end
