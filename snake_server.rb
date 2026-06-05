@@ -1,13 +1,15 @@
-require 'socket'
-require 'websocket'
-require 'json'
+require 'socket'    # para criar o servidor TCP
+require 'websocket' # para comunicação WebSocket
+require 'json'      # para enviar e receber dados em JSON
 
-BLOCK_SIZE = 20
-WIDTH = 600
-HEIGHT = 600
+BLOCK_SIZE = 20  # tamanho de cada bloco do jogo
+WIDTH = 600      # largura do mapa
+HEIGHT = 600     # altura do mapa
 
+# cores disponíveis para cada jogador
 PLAYER_COLORS = ['green', 'blue', 'orange', 'red']
 
+# posições iniciais de cada jogador no mapa
 START_POSITIONS = [
   { x: 100, y: 100, direction: 'right' },
   { x: 500, y: 500, direction: 'left' },
@@ -15,6 +17,7 @@ START_POSITIONS = [
   { x: 500, y: 100, direction: 'left' }
 ]
 
+# cria uma cobra com 5 blocos na posição inicial
 def create_snake(x, y, direction)
   body = []
   5.times do |i|
@@ -25,21 +28,23 @@ def create_snake(x, y, direction)
     direction: direction,
     alive: true,
     score: 0,
-    slow_timer: 0,
-    moves: 0,
-    skip: false
+    slow_timer: 0,  # contador de frames que a cobra fica lenta
+    moves: 0,       # contador de movimentos feitos
+    skip: false     # usado para alternar frames quando lenta
   }
 end
 
+# cria uma comida numa posição aleatória
+# golden: true cria comida dourada que vale 5 pontos
 def create_food(golden: false)
   {
     x: rand(0..29) * BLOCK_SIZE,
     y: rand(0..29) * BLOCK_SIZE,
-    golden: golden  # true se for comida dourada
+    golden: golden
   }
 end
 
-# bola maluca que anda sozinha pelo mapa
+# cria a bola maluca que anda sozinha pelo mapa
 def create_crazy_ball
   {
     x: rand(0..29) * BLOCK_SIZE,
@@ -49,13 +54,17 @@ def create_crazy_ball
   }
 end
 
+# move a cobra uma posição na direção atual
 def move_snake(snake)
   return if !snake[:alive]
+
+  # se estiver lenta, salta frames alternados
   if snake[:slow_timer] > 0
     snake[:slow_timer] -= 1
     snake[:skip] = !snake[:skip]
     return if snake[:skip]
   end
+
   head = snake[:body].first
   new_head = case snake[:direction]
              when 'right' then { x: head[:x] + BLOCK_SIZE, y: head[:y] }
@@ -63,11 +72,12 @@ def move_snake(snake)
              when 'up'    then { x: head[:x], y: head[:y] - BLOCK_SIZE }
              when 'down'  then { x: head[:x], y: head[:y] + BLOCK_SIZE }
              end
-  snake[:body].unshift(new_head)
-  snake[:body].pop
+  snake[:body].unshift(new_head)  # adiciona nova cabeça
+  snake[:body].pop                # remove a cauda
   snake[:moves] += 1
 end
 
+# move a bola maluca e faz-a rebater nas paredes
 def move_crazy_ball(ball)
   # muda de direção aleatoriamente às vezes
   ball[:direction] = ['right', 'left', 'up', 'down'].sample if rand(10) < 2
@@ -96,43 +106,53 @@ def move_crazy_ball(ball)
   end
 end
 
+# verifica se a cobra saiu dos limites do mapa
 def hit_wall?(snake)
   head = snake[:body].first
   head[:x] < 0 || head[:x] >= WIDTH || head[:y] < 0 || head[:y] >= HEIGHT
 end
 
+# verifica se a cobra bateu em si própria
 def hit_self?(snake)
   return false if snake[:moves] < 5
   head = snake[:body].first
   snake[:body][1..].any? { |s| s == head }
 end
 
+# verifica se a cobra bateu noutra cobra
 def hit_other?(snake, others)
   return false if snake[:moves] < 5
   head = snake[:body].first
   others.any? { |other| other[:body].any? { |s| s == head } }
 end
 
+# verifica se a cobra comeu uma comida
 def ate_food?(snake, food)
   head = snake[:body].first
-  head[:x] >= food[:x] && head[:x] < food[:x] + BLOCK_SIZE &&
-  head[:y] >= food[:y] && head[:y] < food[:y] + BLOCK_SIZE
+  size = food[:golden] ? 30 : BLOCK_SIZE  # comida dourada é maior
+  head[:x] >= food[:x] && head[:x] < food[:x] + size &&
+  head[:y] >= food[:y] && head[:y] < food[:y] + size
 end
 
-players = {}
-snakes = {}
-foods = []
-crazy_ball = create_crazy_ball  # uma bola maluca no mapa
-next_id = 0
+# estado do jogo
+players = {}           # clientes conectados
+snakes = {}            # cobras de cada jogador
+foods = []             # lista de comidas no mapa
+crazy_ball = create_crazy_ball  # bola maluca
+next_id = 0            # id do próximo jogador
 golden_food_timer = 0  # contador para aparecer comida dourada
-mutex = Mutex.new
+mutex = Mutex.new      # evita conflitos entre threads
 
+# inicia o servidor na porta 3000
 server = TCPServer.new(3000)
 puts "Servidor iniciado na porta 3000!"
 
+# thread para aceitar novos jogadores
 Thread.new do
   loop do
     client = server.accept
+
+    # handshake WebSocket
     handshake = WebSocket::Handshake::Server.new
     handshake << client.gets("\r\n\r\n")
     client.write(handshake.to_s)
@@ -140,19 +160,20 @@ Thread.new do
     mutex.synchronize do
       player_id = next_id
       next_id += 1
+
+      # cria a cobra e adiciona uma comida para o novo jogador
       pos = START_POSITIONS[player_id % 4]
       snakes[player_id] = create_snake(pos[:x], pos[:y], pos[:direction])
       players[player_id] = client
-
-      # adiciona uma comida normal por jogador
       foods << create_food
-
       puts "Jogador #{player_id + 1} entrou!"
 
+      # envia mensagem de boas vindas com o id e cor do jogador
       welcome = { type: 'welcome', id: player_id, color: PLAYER_COLORS[player_id % 4] }
       frame = WebSocket::Frame::Outgoing::Server.new(version: 13, data: JSON.generate(welcome), type: :text)
       client.write(frame.to_s)
 
+      # thread para receber mensagens do jogador
       Thread.new do
         incoming = WebSocket::Frame::Incoming::Server.new
         loop do
@@ -163,6 +184,7 @@ Thread.new do
             while (msg = incoming.next)
               input = JSON.parse(msg.data)
               mutex.synchronize do
+                # atualiza a direção da cobra
                 if input['direction'] && snakes[player_id][:alive]
                   dir = input['direction']
                   opposites = { 'right' => 'left', 'left' => 'right', 'up' => 'down', 'down' => 'up' }
@@ -186,8 +208,9 @@ Thread.new do
   end
 end
 
+# loop principal do jogo
 loop do
-  sleep 0.15
+  sleep 0.15  # velocidade do jogo
   next if snakes.empty?
 
   mutex.synchronize do
@@ -198,9 +221,7 @@ loop do
     snakes.each do |id, snake|
       next unless snake[:alive]
       if snake[:body].any? { |s| s[:x] == crazy_ball[:x] && s[:y] == crazy_ball[:y] }
-        # cobra perde um bloco mas fica com mínimo de 1
-        snake[:body].pop if snake[:body].length > 1
-        # bola muda de direção ao bater
+        snake[:body].pop if snake[:body].length > 1  # cobra perde um bloco (mínimo 1)
         crazy_ball[:direction] = ['right', 'left', 'up', 'down'].sample
       end
     end
@@ -215,7 +236,7 @@ loop do
       end
     end
 
-    # timer para comida dourada — aparece raramente
+    # aparece comida dourada raramente
     golden_food_timer += 1
     if golden_food_timer >= 50 && foods.none? { |f| f[:golden] }
       foods << create_food(golden: true)
@@ -223,16 +244,18 @@ loop do
       puts "Comida dourada apareceu!"
     end
 
-    # move todas as cobras
+    # move e verifica colisões de todas as cobras
     snakes.each do |id, snake|
       next unless snake[:alive]
       move_snake(snake)
 
+      # verifica colisões com paredes e próprio corpo
       if hit_wall?(snake) || hit_self?(snake)
         snake[:alive] = false
         next
       end
 
+      # verifica colisões com outras cobras
       others = snakes.reject { |other_id, _| other_id == id }.values
       if hit_other?(snake, others)
         snake[:alive] = false
@@ -243,15 +266,15 @@ loop do
       foods.each_with_index do |food, i|
         if ate_food?(snake, food)
           if food[:golden]
-            # comida dourada vale 5 pontos
+            # comida dourada vale 5 pontos e a cobra cresce 5 blocos
             snake[:score] += 5
             5.times { snake[:body] << snake[:body].last.dup }
             foods.delete_at(i)  # remove a comida dourada
           else
-            # comida normal vale 1 ponto
+            # comida normal vale 1 ponto e a cobra cresce 1 bloco
             snake[:body] << snake[:body].last.dup
             snake[:score] += 1
-            foods[i] = create_food  # nova comida normal
+            foods[i] = create_food  # gera nova comida normal
           end
         end
       end
