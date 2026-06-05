@@ -125,7 +125,7 @@ update do
  
     Text.new("Game Over!",           x: 270, y: 350, size: 30, color: 'red')
     Text.new("Prime R para reiniciar", x: 220, y: 395, size: 20, color: 'white')
-    Text.new("Prime S para sair",      x: 260, y: 425, size: 20, color: 'white')
+    Text.new("Prime Esc para sair",      x: 260, y: 425, size: 20, color: 'white')
   end
  
   # --- pontuações ---
